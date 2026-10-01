@@ -1,0 +1,152 @@
+---
+import Base from '../layouts/Base.astro';
+import { INTRO, SALES } from '../data/joc';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Base titol="Inici">
+  <!-- Pantalla 1: el cas (si encara no hi ha agent) -->
+  <section id="briefing" class="briefing" hidden>
+    <p class="sobretitol">Missatge de veu · {INTRO.subtitol}</p>
+    <h1 class="glitch" data-text={INTRO.titol}>{INTRO.titol}</h1>
+    <div class="terminal">
+      <div class="terminal-barra"><span></span><span></span><span></span> dictàfon://agencia-dada/cas-001</div>
+      <div class="terminal-cos" id="missatge-intro"></div>
+      <button class="boto boto-fantasma salta" type="button" data-salta>Salta el missatge ▸▸</button>
+    </div>
+
+    <form id="form-agent" class="form-agent" hidden>
+      <label for="nom-agent">Nom del detectiu o de l'equip</label>
+      <div class="fila-form">
+        <input id="nom-agent" name="agent" type="text" maxlength="28" autocomplete="off" placeholder="p. ex. Agent Lupa" required />
+        <button class="boto boto-principal" type="submit">Accepta el cas</button>
+      </div>
+      <p class="ajuda">
+        Investigaràs sis escenes. A cada escena primer examines els indicis i després resols l'enigma.
+        Cada error fa baixar la teva credibilitat i les pistes costen XP.
+      </p>
+    </form>
+  </section>
+
+  <!-- Pantalla 2: mapa de la xarxa -->
+  <section id="mapa" class="mapa" hidden>
+    <p class="sobretitol">Plànol de Distribucions Ferrer</p>
+    <h1>Tria l'escena <span class="accent">que toca</span></h1>
+    <p class="intro-mapa">
+      Les escenes s'obren en ordre. Cada escena resolta et dona una lletra de la contrasenya de la caixa forta.
+      Amb les sis, pots obrir-la i tancar el cas.
+    </p>
+
+    <ol class="nodes">
+      {SALES.map((sala) => (
+        <li>
+          <a class="node" href={`${base}/sala/${sala.id}/`} data-node={sala.id}>
+            <span class="node-icona" aria-hidden="true">{sala.icona}</span>
+            <span class="node-codi">{sala.codi}</span>
+            <span class="node-nom">{sala.nom}</span>
+            <span class="node-lloc">{sala.lloc}</span>
+            <span class="node-estat" data-estat>Bloquejat</span>
+          </a>
+        </li>
+      ))}
+      <li class="nucli-li">
+        <a class="node nucli" href={`${base}/final/`} data-node="final">
+          <span class="node-icona" aria-hidden="true">◈</span>
+          <span class="node-codi">CAIXA FORTA</span>
+          <span class="node-nom">Tancar el cas</span>
+          <span class="node-lloc">El despatx de la gerent</span>
+          <span class="node-estat" data-estat>Bloquejat</span>
+        </a>
+      </li>
+    </ol>
+
+    <div class="accions-mapa">
+      <button id="reinicia" class="boto boto-fantasma" type="button">Torna a començar el cas</button>
+    </div>
+  </section>
+
+  <script>
+    import { INTRO } from '../data/joc';
+    import { carrega, desa, reinicia, salaDesbloquejada, totesCompletades } from '../scripts/estat';
+    import { pintaHud } from '../scripts/hud';
+    import { so } from '../scripts/so';
+    import { transmet } from '../scripts/transmissio';
+
+    const briefing = document.getElementById('briefing')!;
+    const mapa = document.getElementById('mapa')!;
+    const form = document.getElementById('form-agent') as HTMLFormElement;
+
+    function mostraMapa() {
+      const estat = carrega();
+      briefing.hidden = true;
+      mapa.hidden = false;
+      let actualMarcat = false;
+      document.querySelectorAll<HTMLAnchorElement>('[data-node]').forEach((node) => {
+        const id = node.dataset.node!;
+        const etiqueta = node.querySelector<HTMLElement>('[data-estat]')!;
+        let estatNode: 'bloquejat' | 'disponible' | 'recuperat';
+        if (id === 'final') {
+          estatNode = estat.final.completada ? 'recuperat' : totesCompletades(estat) ? 'disponible' : 'bloquejat';
+        } else {
+          const n = Number(id);
+          estatNode = estat.sales[n]?.completada ? 'recuperat' : salaDesbloquejada(estat, n) ? 'disponible' : 'bloquejat';
+        }
+        node.dataset.estatNode = estatNode;
+        if (estatNode === 'disponible' && !actualMarcat) {
+          node.classList.add('actual');
+          actualMarcat = true;
+        }
+        etiqueta.textContent =
+          estatNode === 'recuperat' ? (id === 'final' ? 'Cas tancat' : `Resolta · +${estat.sales[Number(id)]?.xp ?? estat.final.xp} XP`)
+          : estatNode === 'disponible' ? 'Pots entrar'
+          : 'Bloquejat';
+        if (estatNode === 'bloquejat') {
+          node.setAttribute('aria-disabled', 'true');
+          node.addEventListener('click', (e) => {
+            e.preventDefault();
+            so('error');
+            node.classList.remove('sacseja');
+            void node.offsetWidth;
+            node.classList.add('sacseja');
+          });
+        }
+      });
+      pintaHud(estat);
+    }
+
+    const estat = carrega();
+    if (estat.agent) {
+      mostraMapa();
+    } else {
+      briefing.hidden = false;
+      transmet(document.getElementById('missatge-intro')!, INTRO.transmissio, () => {
+        form.hidden = false;
+        document.getElementById('nom-agent')?.focus();
+      });
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const nom = (new FormData(form).get('agent') as string).trim();
+      if (!nom) return;
+      const nou = carrega();
+      nou.agent = nom;
+      desa(nou);
+      so('desbloqueig');
+      mostraMapa();
+    });
+
+    const botoReinicia = document.getElementById('reinicia') as HTMLButtonElement;
+    let confirma = false;
+    botoReinicia.addEventListener('click', () => {
+      if (!confirma) {
+        confirma = true;
+        botoReinicia.textContent = 'Segur? Es perdrà tot el progrés. Clica un altre cop';
+        botoReinicia.classList.add('perill');
+        return;
+      }
+      reinicia();
+      location.reload();
+    });
+
+  </script>
+</Base>
